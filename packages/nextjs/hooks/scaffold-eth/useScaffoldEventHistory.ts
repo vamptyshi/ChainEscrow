@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { deduplicateEvents, fetchEventHistoryPage, getNextEventBlock } from "./eventHistoryUtils";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { Abi, AbiEvent, ExtractAbiEventNames } from "abitype";
 import { BlockNumber, GetLogsParameters } from "viem";
 import { hardhat } from "viem/chains";
@@ -17,41 +18,35 @@ import {
 
 const getEvents = async (
   getLogsParams: GetLogsParameters<AbiEvent | undefined, AbiEvent[] | undefined, boolean, BlockNumber, BlockNumber>,
-  publicClient?: UsePublicClientReturnType<Config, number>,
+  publicClient: NonNullable<UsePublicClientReturnType<Config, number>>,
   Options?: {
     blockData?: boolean;
     transactionData?: boolean;
     receiptData?: boolean;
   },
 ) => {
-  const logs = await publicClient?.getLogs({
+  const logs = await publicClient.getLogs({
     address: getLogsParams.address,
     fromBlock: getLogsParams.fromBlock,
     toBlock: getLogsParams.toBlock,
     args: getLogsParams.args,
     event: getLogsParams.event,
   });
-  if (!logs) return undefined;
 
-  const finalEvents = await Promise.all(
-    logs.map(async log => {
-      return {
-        ...log,
-        blockData:
-          Options?.blockData && log.blockHash ? await publicClient?.getBlock({ blockHash: log.blockHash }) : null,
-        transactionData:
-          Options?.transactionData && log.transactionHash
-            ? await publicClient?.getTransaction({ hash: log.transactionHash })
-            : null,
-        receiptData:
-          Options?.receiptData && log.transactionHash
-            ? await publicClient?.getTransactionReceipt({ hash: log.transactionHash })
-            : null,
-      };
-    }),
+  return Promise.all(
+    logs.map(async log => ({
+      ...log,
+      blockData: Options?.blockData && log.blockHash ? await publicClient.getBlock({ blockHash: log.blockHash }) : null,
+      transactionData:
+        Options?.transactionData && log.transactionHash
+          ? await publicClient.getTransaction({ hash: log.transactionHash })
+          : null,
+      receiptData:
+        Options?.receiptData && log.transactionHash
+          ? await publicClient.getTransactionReceipt({ hash: log.transactionHash })
+          : null,
+    })),
   );
-
-  return finalEvents;
 };
 
 /**
@@ -96,7 +91,6 @@ export const useScaffoldEventHistory = <
 }: UseScaffoldEventHistoryConfig<TContractName, TEventName, TBlockData, TTransactionData, TReceiptData>) => {
   const selectedNetwork = useSelectedNetwork(chainId);
 
-  // Runtime warning for non-local chains
   useEffect(() => {
     if (selectedNetwork.id !== hardhat.id) {
       console.log(
@@ -105,15 +99,8 @@ export const useScaffoldEventHistory = <
     }
   }, [selectedNetwork.id]);
 
-  const publicClient = usePublicClient({
-    chainId: selectedNetwork.id,
-  });
-  const [liveEvents, setLiveEvents] = useState<any[]>([]);
-  const [lastFetchedBlock, setLastFetchedBlock] = useState<bigint | null>(null);
-  const [isPollingActive, setIsPollingActive] = useState(false);
-
-  const { data: blockNumber } = useBlockNumber({ watch: watch, chainId: selectedNetwork.id });
-
+  const publicClient = usePublicClient({ chainId: selectedNetwork.id });
+  const { data: blockNumber } = useBlockNumber({ watch, chainId: selectedNetwork.id });
   const { data: deployedContractData } = useDeployedContractInfo({
     contractName,
     chainId: selectedNetwork.id as AllowedChainIds,
@@ -122,9 +109,10 @@ export const useScaffoldEventHistory = <
   const event =
     deployedContractData &&
     ((deployedContractData.abi as Abi).find(part => part.type === "event" && part.name === eventName) as AbiEvent);
-
-  const isContractAddressAndClientReady = Boolean(deployedContractData?.address) && Boolean(publicClient);
-
+  const isContractAddressAndClientReady =
+    Boolean(deployedContractData?.address) && Boolean(publicClient) && Boolean(event);
+  const maxBlock =
+    blockNumber === undefined ? undefined : toBlock !== undefined && toBlock < blockNumber ? toBlock : blockNumber;
   const fromBlockValue =
     fromBlock !== undefined
       ? fromBlock
@@ -138,155 +126,71 @@ export const useScaffoldEventHistory = <
     queryKey: [
       "eventHistory",
       {
+        version: 2,
         contractName,
         address: deployedContractData?.address,
         eventName,
-        fromBlock: fromBlockValue?.toString(),
+        fromBlock: fromBlockValue.toString(),
         toBlock: toBlock?.toString(),
         chainId: selectedNetwork.id,
         filters: JSON.stringify(filters, replacer),
         blocksBatchSize: blocksBatchSize.toString(),
+        blockData: Boolean(blockData),
+        transactionData: Boolean(transactionData),
+        receiptData: Boolean(receiptData),
       },
     ],
     queryFn: async ({ pageParam }) => {
-      if (!isContractAddressAndClientReady) return undefined;
-
-      // Calculate the toBlock for this batch
-      let batchToBlock = toBlock;
-      const batchEndBlock = pageParam + BigInt(blocksBatchSize) - 1n;
-      const maxBlock = toBlock || (blockNumber ? BigInt(blockNumber) : undefined);
-      if (maxBlock) {
-        batchToBlock = batchEndBlock < maxBlock ? batchEndBlock : maxBlock;
+      if (!deployedContractData?.address || !publicClient || !event) {
+        throw new Error("Contract events are not available yet");
       }
-
-      const data = await getEvents(
-        {
-          address: deployedContractData?.address,
-          event,
-          fromBlock: pageParam,
-          toBlock: batchToBlock,
-          args: filters,
-        },
-        publicClient,
-        { blockData, transactionData, receiptData },
+      return fetchEventHistoryPage(pageParam, maxBlock, blocksBatchSize, range =>
+        getEvents({ address: deployedContractData.address, event, ...range, args: filters }, publicClient, {
+          blockData,
+          transactionData,
+          receiptData,
+        }),
       );
-
-      setLastFetchedBlock(batchToBlock || blockNumber || 0n);
-
-      return data;
     },
-    enabled: enabled && isContractAddressAndClientReady && !isPollingActive, // Disable when polling starts
+    // Never let getLogs default to "latest" before the current block is known.
+    enabled: enabled && isContractAddressAndClientReady && maxBlock !== undefined,
     initialPageParam: fromBlockValue,
-    getNextPageParam: (lastPage, allPages, lastPageParam) => {
-      if (!blockNumber || fromBlockValue >= blockNumber) return undefined;
-
-      const nextBlock = lastPageParam + BigInt(blocksBatchSize);
-
-      // Don't go beyond the specified toBlock or current block
-      const maxBlock = toBlock && toBlock < blockNumber ? toBlock : blockNumber;
-
-      if (nextBlock > maxBlock) return undefined;
-
-      return nextBlock;
-    },
+    // A partial final batch resumes at its actual end, not a full-batch offset.
+    getNextPageParam: lastPage => getNextEventBlock(lastPage, maxBlock),
     select: data => {
-      const events = data.pages.flat() as unknown as UseScaffoldEventHistoryData<
-        TContractName,
-        TEventName,
-        TBlockData,
-        TTransactionData,
-        TReceiptData
-      >;
-
-      return {
-        pages: events?.reverse(),
-        pageParams: data.pageParams,
-      };
+      const events = deduplicateEvents(data.pages.flatMap(page => page.events)).reverse() as unknown as
+        | UseScaffoldEventHistoryData<TContractName, TEventName, TBlockData, TTransactionData, TReceiptData>
+        | undefined;
+      return { pages: events, pageParams: data.pageParams };
     },
   });
 
-  // Check if we're caught up and should start polling
-  const shouldStartPolling = () => {
-    if (!watch || !blockNumber || isPollingActive) return false;
-
-    return !query.hasNextPage && query.status === "success";
-  };
-
-  // Poll for new events when watch mode is enabled
-  useQuery({
-    queryKey: ["liveEvents", contractName, eventName, blockNumber?.toString(), lastFetchedBlock?.toString()],
-    enabled: Boolean(
-      watch && enabled && isContractAddressAndClientReady && blockNumber && (shouldStartPolling() || isPollingActive),
-    ),
-    queryFn: async () => {
-      if (!isContractAddressAndClientReady || !blockNumber) return null;
-
-      if (!isPollingActive && shouldStartPolling()) {
-        setIsPollingActive(true);
-      }
-
-      const maxBlock = toBlock && toBlock < blockNumber ? toBlock : blockNumber;
-      const startBlock = lastFetchedBlock || maxBlock;
-
-      // Only fetch if there are new blocks to check
-      if (startBlock >= maxBlock) return null;
-
-      const newEvents = await getEvents(
-        {
-          address: deployedContractData?.address,
-          event,
-          fromBlock: startBlock + 1n,
-          toBlock: maxBlock,
-          args: filters,
-        },
-        publicClient,
-        { blockData, transactionData, receiptData },
-      );
-
-      if (newEvents && newEvents.length > 0) {
-        setLiveEvents(prev => [...newEvents, ...prev]);
-      }
-
-      setLastFetchedBlock(maxBlock);
-      return newEvents;
-    },
-    refetchInterval: false,
-  });
-
-  // Manual trigger to fetch next page when previous page completes (only when not polling)
+  // Historical loading and watched gaps share bounded, retryable pages. A failed
+  // page remains the next cursor and its error stays visible on the same query.
   useEffect(() => {
     if (
-      !isPollingActive &&
+      enabled &&
+      isContractAddressAndClientReady &&
       query.status === "success" &&
       query.hasNextPage &&
-      !query.isFetchingNextPage &&
+      !query.isFetching &&
       !query.error
     ) {
       query.fetchNextPage();
     }
-  }, [query, isPollingActive]);
+  }, [query, enabled, isContractAddressAndClientReady]);
 
-  // Combine historical data from infinite query with live events from watch hook
-  const historicalEvents = query.data?.pages || [];
-  const allEvents = [...liveEvents, ...historicalEvents] as typeof historicalEvents;
-
-  // remove duplicates
-  const seenEvents = new Set<string>();
-  const combinedEvents = allEvents.filter(event => {
-    const eventKey = `${event?.transactionHash}-${event?.logIndex}-${event?.blockHash}`;
-    if (seenEvents.has(eventKey)) {
-      return false;
-    }
-    seenEvents.add(eventKey);
-    return true;
-  }) as typeof historicalEvents;
+  // Keep the public retry action focused on the failed page rather than
+  // re-reading an already loaded history before resuming the watched gap.
+  const refetch = (options?: Parameters<typeof query.refetch>[0]) =>
+    query.isFetchNextPageError ? query.fetchNextPage(options) : query.refetch(options);
 
   return {
-    data: combinedEvents,
+    data: query.data?.pages || [],
     status: query.status,
     error: query.error,
     isLoading: query.isLoading,
     isFetchingNewEvent: query.isFetchingNextPage,
-    refetch: query.refetch,
+    refetch,
   };
 };

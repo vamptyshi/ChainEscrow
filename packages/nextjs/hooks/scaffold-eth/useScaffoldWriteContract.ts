@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { MutateOptions } from "@tanstack/react-query";
 import { Abi, ExtractAbiFunctionNames } from "abitype";
 import { Config, UseWriteContractParameters, useAccount, useConfig, useWriteContract } from "wagmi";
-import { WriteContractErrorType, WriteContractReturnType } from "wagmi/actions";
+import { WriteContractErrorType, WriteContractReturnType, getAccount } from "wagmi/actions";
 import { WriteContractVariables } from "wagmi/query";
 import { useSelectedNetwork } from "~~/hooks/scaffold-eth";
 import { useDeployedContractInfo, useTransactor } from "~~/hooks/scaffold-eth";
@@ -71,7 +71,7 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
     }
   }, [configOrName]);
 
-  const { chain: accountChain } = useAccount();
+  const { chain: accountChain, address: accountAddress } = useAccount();
   const writeTx = useTransactor();
   const [isMining, setIsMining] = useState(false);
 
@@ -113,6 +113,8 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
         abi: deployedContractData.abi as Abi,
         address: deployedContractData.address,
         ...variables,
+        account: variables.account ?? accountAddress,
+        chainId: selectedNetwork.id,
       } as WriteContractVariables<Abi, string, any[], Config, number>;
 
       if (!finalConfig?.disableSimulate) {
@@ -121,6 +123,21 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
           writeContractParams: writeContractObject,
           chainId: selectedNetwork.id as AllowedChainIds,
         });
+      }
+
+      // Simulation is asynchronous. Bind the request to its original signer and
+      // target network, and stop if the user switched either while it ran.
+      const expectedAccount =
+        typeof writeContractObject.account === "string"
+          ? writeContractObject.account
+          : writeContractObject.account?.address;
+      const currentAccount = getAccount(wagmiConfig);
+      if (
+        !expectedAccount ||
+        currentAccount.address?.toLowerCase() !== expectedAccount.toLowerCase() ||
+        currentAccount.chainId !== selectedNetwork.id
+      ) {
+        throw new Error("La cuenta o la red cambió durante la preparación. Inicia la operación de nuevo.");
       }
 
       const makeWriteWithParams = () =>
@@ -171,6 +188,8 @@ export function useScaffoldWriteContract<TContractName extends ContractName>(
         abi: deployedContractData.abi as Abi,
         address: deployedContractData.address,
         ...variables,
+        account: variables.account ?? accountAddress,
+        chainId: selectedNetwork.id,
       } as WriteContractVariables<Abi, string, any[], Config, number>,
       options as
         | MutateOptions<

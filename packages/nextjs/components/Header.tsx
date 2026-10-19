@@ -1,103 +1,75 @@
 "use client";
 
-import React, { useRef } from "react";
-import Image from "next/image";
+import { useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { hardhat } from "viem/chains";
-import { Bars3Icon, BugAntIcon } from "@heroicons/react/24/outline";
-import { FaucetButton, RainbowKitCustomConnectButton } from "~~/components/scaffold-eth";
-import { useOutsideClick, useTargetNetwork } from "~~/hooks/scaffold-eth";
+import { Bars3Icon, ShieldCheckIcon } from "@heroicons/react/24/outline";
+import { WalletButton } from "~~/components/escrow/WalletButton";
+import { useOutsideClick } from "~~/hooks/scaffold-eth";
 
-type HeaderMenuLink = {
-  label: string;
-  href: string;
-  icon?: React.ReactNode;
-};
+type HeaderMenuLink = { label: string; href: string };
 
 export const menuLinks: HeaderMenuLink[] = [
-  {
-    label: "Home",
-    href: "/",
-  },
-  {
-    label: "Debug Contracts",
-    href: "/debug",
-    icon: <BugAntIcon className="h-4 w-4" />,
-  },
+  { label: "总览", href: "/escrow#overview" },
+  { label: "订单管理", href: "/escrow#orders" },
+  { label: "创建订单", href: "/escrow#create-order" },
+  { label: "交易记录", href: "/escrow#history" },
+  { label: "合约调试", href: "/debug" },
 ];
 
 export const HeaderMenuLinks = () => {
   const pathname = usePathname();
-
   return (
     <>
-      {menuLinks.map(({ label, href, icon }) => {
-        const isActive = pathname === href;
-        return (
-          <li key={href}>
-            <Link
-              href={href}
-              passHref
-              className={`${
-                isActive ? "bg-secondary shadow-md" : ""
-              } hover:bg-secondary hover:shadow-md focus:!bg-secondary active:!text-neutral py-1.5 px-3 text-sm rounded-full gap-2 grid grid-flow-col`}
-            >
-              {icon}
-              <span>{label}</span>
-            </Link>
-          </li>
-        );
-      })}
+      {menuLinks.map(({ label, href }) => (
+        <li key={href}>
+          <Link
+            href={href}
+            className={`ce-nav-link ${pathname === "/debug" && href === "/debug" ? "ce-nav-active" : ""}`}
+          >
+            {label}
+          </Link>
+        </li>
+      ))}
     </>
   );
 };
 
-/**
- * Site header
- */
 export const Header = () => {
-  const { targetNetwork } = useTargetNetwork();
-  const isLocalNetwork = targetNetwork.id === hardhat.id;
-
   const burgerMenuRef = useRef<HTMLDetailsElement>(null);
-  useOutsideClick(burgerMenuRef, () => {
-    burgerMenuRef?.current?.removeAttribute("open");
-  });
+  useOutsideClick(burgerMenuRef, () => burgerMenuRef.current?.removeAttribute("open"));
 
   return (
-    <div className="sticky lg:static top-0 navbar bg-base-100 min-h-0 shrink-0 justify-between z-20 shadow-md shadow-secondary px-0 sm:px-2">
-      <div className="navbar-start w-auto lg:w-1/2">
-        <details className="dropdown" ref={burgerMenuRef}>
-          <summary className="ml-1 btn btn-ghost lg:hidden hover:bg-transparent">
-            <Bars3Icon className="h-1/2" />
-          </summary>
-          <ul
-            className="menu menu-compact dropdown-content mt-3 p-2 shadow-sm bg-base-100 rounded-box w-52"
-            onClick={() => {
-              burgerMenuRef?.current?.removeAttribute("open");
-            }}
-          >
+    <header className="ce-header">
+      <div className="ce-header-inner">
+        <Link href="/escrow" className="ce-brand" aria-label="ChainEscrow 首页">
+          <span className="ce-brand-icon">
+            <ShieldCheckIcon className="h-5 w-5" />
+          </span>
+          <span className="ce-brand-text">
+            CHAIN<span>ESCROW</span>
+            <small>链上托管 · ON-CHAIN ESCROW</small>
+          </span>
+        </Link>
+        <nav className="ce-desktop-nav" aria-label="主导航">
+          <ul>
             <HeaderMenuLinks />
           </ul>
+        </nav>
+        <div className="ce-header-wallet">
+          <WalletButton />
+        </div>
+        <details className="ce-mobile-menu" ref={burgerMenuRef}>
+          <summary aria-label="打开菜单">
+            <Bars3Icon className="h-6 w-6" />
+          </summary>
+          <nav aria-label="移动导航" onClick={() => burgerMenuRef.current?.removeAttribute("open")}>
+            <ul>
+              <HeaderMenuLinks />
+            </ul>
+          </nav>
         </details>
-        <Link href="/" passHref className="hidden lg:flex items-center gap-2 ml-4 mr-6 shrink-0">
-          <div className="flex relative w-10 h-10">
-            <Image alt="SE2 logo" className="cursor-pointer" fill src="/logo.svg" />
-          </div>
-          <div className="flex flex-col">
-            <span className="font-bold leading-tight">Scaffold-ETH</span>
-            <span className="text-xs">Ethereum dev stack</span>
-          </div>
-        </Link>
-        <ul className="hidden lg:flex lg:flex-nowrap menu menu-horizontal px-1 gap-2">
-          <HeaderMenuLinks />
-        </ul>
       </div>
-      <div className="navbar-end grow mr-4">
-        <RainbowKitCustomConnectButton />
-        {isLocalNetwork && <FaucetButton />}
-      </div>
-    </div>
+    </header>
   );
 };

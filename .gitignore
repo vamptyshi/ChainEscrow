@@ -21,3 +21,10 @@ node_modules
 
 # cli
 dist
+# Private environment variables
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local deployment backups
+/deployment-backups/

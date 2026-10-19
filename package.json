@@ -47,7 +47,8 @@
     "vercel": "yarn workspace @se-2/nextjs vercel",
     "vercel:login": "yarn workspace @se-2/nextjs vercel:login",
     "vercel:yolo": "yarn workspace @se-2/nextjs vercel:yolo",
-    "verify": "yarn hardhat:verify"
+    "verify": "yarn hardhat:verify",
+    "test:escrow-ui": "node --test tests/*.test.cjs packages/nextjs/hooks/scaffold-eth/eventHistoryUtils.test.cjs"
   },
   "devDependencies": {
     "husky": "~9.1.6",

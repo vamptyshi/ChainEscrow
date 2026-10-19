@@ -50,6 +50,7 @@ export const useTransactor = (_walletClient?: WalletClient): TransactionFunc => 
     let notificationId = null;
     let transactionHash: Hash | undefined = undefined;
     let transactionReceipt: TransactionReceipt | undefined;
+    let replacementReason: "repriced" | "cancelled" | "replaced" | undefined;
     let blockExplorerTxURL = "";
     let chainId: number = scaffoldConfig.targetNetworks[0].id;
     try {
@@ -78,9 +79,17 @@ export const useTransactor = (_walletClient?: WalletClient): TransactionFunc => 
       transactionReceipt = await publicClient.waitForTransactionReceipt({
         hash: transactionHash,
         confirmations: options?.blockConfirmations,
+        onReplaced: replacement => {
+          replacementReason = replacement.reason;
+        },
       });
+      transactionHash = transactionReceipt.transactionHash;
+      blockExplorerTxURL = getBlockExplorerTxLink(chainId, transactionHash);
       notification.remove(notificationId);
 
+      if (replacementReason === "cancelled" || replacementReason === "replaced") {
+        throw new Error("La transacción fue cancelada o sustituida. La operación solicitada no se ha confirmado.");
+      }
       if (transactionReceipt.status === "reverted") throw new Error("Transaction reverted");
 
       notification.success(
