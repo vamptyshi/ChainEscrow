@@ -161,6 +161,40 @@ yarn test:escrow-ui
 
 本仓库包含课程实验代码和测试网演示结果，仅用于学习与演示，不应用于管理真实资产。
 
-## 9. 课程说明
+## 9. 加分实验：重入攻击挑战（6 分）
 
-本项目属于“在区块链上构建应用系统”课程大作业，选择 **路线 B**。订单时间线为额外实现的加分功能。其他加分实验（例如独立的重入攻击挑战）不属于当前 Escrow 页面核心流程，若完成会另行提交对应证据。
+本项目除路线 B 的订单时间线（3 分）外，还完成了课程第 6.1 节的**重入攻击挑战（Reentrancy Challenge）**。该实验是**独立的安全演示**，不修改已有 ChainEscrow 合约和前端，也不针对第三方合约。
+
+> ⚠️ **仅供教学：** \`VulnerableVault\` 故意保留重入漏洞。所有操作均在 POTOS Testnet 上使用自有实验合约与测试币完成，不能将漏洞示例部署用于保管真实资产。实验所用的 \`VulnerableVault.sol\`、\`Attacker.sol\` 和 \`FixedVault.sol\` 源文件将放入仓库的 \`reentrancy/\` 目录单独管理。
+
+### 9.1 漏洞原理与修复
+
+\`VulnerableVault.withdraw()\` 在向调用者转账之后，才执行 \`balances[msg.sender] = 0\`。攻击合约通过 \`receive()\` 在收到 POT 时再次调用 \`withdraw()\`，利用余额尚未清零的窗口重复提取资金。
+
+\`FixedVault\` 将 \`balances[msg.sender] = 0\` 移到外部转账**之前**，遵循 **Checks-Effects-Interactions (CEI)** 原则：先检查条件、更新合约内部状态，最后与外部地址交互。重入时，原余额已经为 0，重复提取会失败，整笔攻击交易回滚。
+
+这一原则与本项目 \`Escrow.sol\` 的部分处理逻辑一致。例如 \`confirm()\` 在执行 ERC-20 \`transfer\` 之前，先将订单状态更新为 \`Completed\`；\`resolve()\` 也先更新订单状态再转账。除此之外，合约还可以使用 \`ReentrancyGuard\`、提现式支付（Pull Payment）、严格的权限与状态检查以及安全测试等措施降低风险。
+
+### 9.2 POTOS Testnet 实测结果
+
+| 测试 | 初始操作 | 测试结果 |
+| --- | --- | --- |
+| 第一轮：\`VulnerableVault\` | 受害者账户存入 \`0.002 POT\`；攻击者通过 \`attack()\` 存入 \`0.001 POT\` | 攻击成功：\`VulnerableVault.vaultBalance() = 0\`，\`Attacker.attackerBalance() = 0.003 POT\`。 |
+| 第二轮：\`FixedVault\` | 受害者账户存入 \`0.0001 POT\`；攻击者尝试使用 \`0.00005 POT\` 再次攻击 | 攻击交易失败（revert），\`FixedVault.vaultBalance() = 0.0001 POT\`，新攻击合约余额为 \`0\`。 |
+
+上述余额均为实验中在 Remix 查询的结果；这里的 POT 是测试网代币。若交易回滚，附带的转账也会回滚，但链上交易仍可能消耗 Gas。
+
+### 9.3 攻击交易记录
+
+| 操作 | 交易哈希 | 区块 | 状态 | 浏览器 |
+| --- | --- | --- | --- | --- |
+| \`Attacker.attack()\` → \`VulnerableVault\` | \`0x472c091e773e96e690f5c9ee6fb470ef02ef7f5d313495abb952b62ce92b1664\` | \`2688706\` | \`Success\` | [查看成功交易](https://scan-testnet.potos.hk/tx/0x472c091e773e96e690f5c9ee6fb470ef02ef7f5d313495abb952b62ce92b1664) |
+| \`Attacker.attack()\` → \`FixedVault\` | \`0xb3129e805ff1d8c67f2a61c54deebdcfb5eb9c254bdc975a7bf85cb782d3f31e\` | \`2688902\` | \`Failed\` | [查看失败交易](https://scan-testnet.potos.hk/tx/0xb3129e805ff1d8c67f2a61c54deebdcfb5eb9c254bdc975a7bf85cb782d3f31e) |
+
+POTOS 区块浏览器当前不一定提供完整的 **Internal Transactions** 列表，因此实验报告将交易状态与链上余额变化结合起来作为重入攻击成功及修复有效的证据；不声称浏览器已经显示多次内部 \`withdraw()\` 调用。
+
+课程报告的证明材料依次编号为 **4C-1（余额变化）**、**4C-2（成功攻击交易）** 和 **4C-3（修复后失败交易及保留余额）**。
+
+## 10. 课程说明
+
+本项目属于“在区块链上构建应用系统”课程大作业，选择 **路线 B**。订单时间线（3 分）和独立的重入攻击挑战（6 分）均已完成实验并整理对应证据。两项加分能否计入最终成绩由教师评定；重入实验不属于 Escrow 页面核心功能。
